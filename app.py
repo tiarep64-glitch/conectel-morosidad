@@ -51,7 +51,7 @@ with col2:
 tiene_internet, velocidad_mbps, tiene_tv, tiene_linea_movil, num_servicios = 1, 300.0, 1, 1, 3
 metodo_pago = "WebPay"
 
-# 4. BOTÓN DE EVALUACIÓN Y PROCESAMIENTO CON ALINEACIÓN REPARADA
+# 4. BOTÓN DE EVALUACIÓN Y PROCESAMIENTO
 if st.button("Evaluar Riesgo de Cliente", type="primary"):
     try:
         # Estructurar el diccionario con los valores de la interfaz
@@ -92,7 +92,7 @@ if st.button("Evaluar Riesgo de Cliente", type="primary"):
         features_combined = np.hstack((X_num_total, X_cat_enc))
         df_temporal = pd.DataFrame(features_combined, columns=all_features_names)
 
-        # Ajuste forzado para corregir las 57 columnas a 55 características exactas
+        # Ajuste forzado para corregir la discrepancia de columnas (57 vs 55)
         if hasattr(model, 'feature_names_in_'):
             columnas_entrenamiento = model.feature_names_in_
             df_final = df_temporal.reindex(columns=columnas_entrenamiento, fill_value=0)
@@ -106,5 +106,21 @@ if st.button("Evaluar Riesgo de Cliente", type="primary"):
                 relleno = np.zeros((features_procesadas.shape[0], num_caracteristicas_esperadas - features_procesadas.shape[1]))
                 features_procesadas = np.hstack((features_procesadas, relleno))
 
-        # Realizar la predicción final
-        probabilidad = model.predict_proba(features
+        # Realizar la predicción final (Línea corregida)
+        probabilidad = model.predict_proba(features_procesadas)[0][1]
+        prob_porcentaje = probabilidad * 100
+
+        st.write("---")
+        st.subheader("📈 Resultado del Análisis de Riesgo")
+        
+        if probabilidad >= 0.60:
+            st.error(f"⚠️ **Riesgo CRÍTICO / ALTO:** El cliente presenta un **{prob_porcentaje:.2f}%** de probabilidad de caer en mora severa.")
+            st.markdown("**Acción recomendada:** Gatillar campaña de cobranza preventiva inmediata.")
+        elif probabilidad >= 0.30:
+            st.warning(f"🟡 **Riesgo MEDIO:** El cliente presenta un **{prob_porcentaje:.2f}%** de probabilidad de retraso.")
+            st.markdown("**Acción recomendada:** Monitorear comportamiento de pago.")
+        else:
+            st.success(f"🟢 **Riesgo BAJO:** El cliente se mantiene estable con un **{prob_porcentaje:.2f}%** de probabilidad de mora.")
+            
+    except Exception as error_ejecucion:
+        st.error(f"🚨 Error en procesamiento: {error_ejecucion}")
