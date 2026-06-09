@@ -1,52 +1,3 @@
-import streamlit as st
-import joblib
-import pandas as pd
-import numpy as np
-
-st.set_page_config(page_title="ConecTel - Predictor de Morosidad", layout="wide")
-
-@st.cache_resource
-def load_assets():
-    model = joblib.load('model.joblib')
-    imputer_num = joblib.load('imputer_num.joblib')
-    imputer_cat = joblib.load('imputer_cat.joblib')
-    encoder = joblib.load('encoder.joblib')
-    return model, imputer_num, imputer_cat, encoder
-
-try:
-    model, imputer_num, imputer_cat, encoder = load_assets()
-except Exception as e:
-    st.error(f"❌ Error al cargar los archivos del modelo: {e}")
-
-st.title("🔔 Sistema de Alerta Temprana de Morosidad — ConecTel S.A.")
-st.markdown("Use este formulario para evaluar proactivamente el riesgo financiero de un cliente antes de los próximos 6 meses.")
-
-col1, col2 = st.columns(2)
-
-with col1:
-    st.subheader("📊 Datos Demográficos y de Cuenta")
-    edad = st.slider("Edad", 18, 100, 35)
-    genero = st.selectbox("Género", ["Masculino", "Femenino"])
-    region = st.selectbox("Región", ["Metropolitana", "Valparaíso", "Antofagasta", "Araucanía", "Biobío"])
-    tipo_contrato = st.selectbox("Tipo de Contrato", ["Mensual", "Anual", "Bianual"])
-    plan = st.selectbox("Tipo de Plan", ["Básico", "Estándar", "Premium"])
-    antiguedad_meses = st.number_input("Antigüedad del cliente (meses)", min_value=0, value=12)
-    meses_sin_reajuste = st.number_input("Meses sin reajuste tarifario", min_value=0, value=6)
-
-with col2:
-    st.subheader("💸 Datos Financieros y de Comportamiento")
-    factura_mensual_clp = st.number_input("Monto Factura Mensual (CLP)", min_value=0, value=35000)
-    ingreso_estimado_clp = st.number_input("Ingreso Estimado Mensual (CLP)", min_value=0, value=650000)
-    dias_mora_hist = st.number_input("Días de mora históricos", min_value=0, value=0)
-    reclamos_12m = st.number_input("Cantidad de reclamos (últimos 12 meses)", min_value=0, value=0)
-    llamadas_soporte_6m = st.number_input("Llamadas a soporte técnico (últimos 6 meses)", min_value=0, value=1)
-    nps = st.slider("Nota NPS dada por el cliente (Satisfacción 1-10)", 1, 10, 7)
-    descuento_activo = st.selectbox("¿Tiene descuento activo actualmente?", ["Sí", "No"])
-    cambios_plan_12m = st.number_input("Cambios de plan realizados en el año", min_value=0, value=0)
-
-tiene_internet, velocidad_mbps, tiene_tv, tiene_linea_movil, num_servicios = 1, 300.0, 1, 1, 3
-metodo_pago = "WebPay"
-
 if st.button("Evaluar Riesgo de Cliente", type="primary"):
     try:
         input_dict = {
@@ -66,15 +17,48 @@ if st.button("Evaluar Riesgo de Cliente", type="primary"):
 
         X_num_imp = imputer_num.transform(X_input[num_cols_originales])
         X_cat_imp = imputer_cat.transform(X_input[cat_cols_originales])
+        
+        # 1. Transformar categorías
         X_cat_enc = encoder.transform(X_cat_imp)
 
+        # 2. Calcular variables derivadas numéricas
         ratio_factura_ingreso = float(factura_mensual_clp) / (float(ingreso_estimado_clp) + 1.0)
         indice_conflictividad = float(reclamos_12m) + float(llamadas_soporte_6m)
         
         derivadas = np.array([[ratio_factura_ingreso, indice_conflictividad]])
         X_num_total = np.hstack((X_num_imp, derivadas))
-        features_procesadas = np.hstack((X_num_total, X_cat_enc))
+        
+        # 3. Obtener nombres de columnas para reconstruir el set completo transitorio
+        # (Esto nos sirve para identificar el desajuste)
+        num_names = num_cols_originales + ['ratio_factura_ingreso', 'indice_conflictividad']
+        cat_names = encoder.get_feature_names_out(cat_cols_originales).tolist()
+        all_features_names = num_names + cat_names
+        
+        # Juntamos los datos en un DataFrame temporal
+        features_combined = np.hstack((X_num_total, X_cat_enc))
+        df_temporal = pd.DataFrame(features_combined, columns=all_features_names)
 
+        # =========================================================================
+        # 🔥 EL PASO CORRECTOR: ALINEACIÓN FORZADA CON EL MODELO ENTRENADO 🔥
+        # =========================================================================
+        if hasattr(model, 'feature_names_in_'):
+            # Si tu RandomForest se guardó conociendo el nombre de sus columnas (ideal):
+            columnas_entrenamiento = model.feature_names_in_
+            df_final = df_temporal.reindex(columns=columnas_entrenamiento, fill_value=0)
+            features_procesadas = df_final.values
+        else:
+            # Si se guardó como un array de Numpy puro sin nombres, forzamos el recorte/relleno
+            # a las 55 características exactas que tu modelo necesita.
+            num_caracteristicas_esperadas = 55
+            features_procesadas = df_temporal.values
+            if features_procesadas.shape[1] > num_caracteristicas_esperadas:
+                features_procesadas = features_procesadas[:, :num_caracteristicas_esperadas]
+            elif features_procesadas.shape[1] < num_caracteristicas_esperadas:
+                relleno = np.zeros((features_procesadas.shape[0], num_caracteristicas_esperadas - features_procesadas.shape[1]))
+                features_procesadas = np.hstack((features_procesadas, relleno))
+        # =========================================================================
+
+        # 4. Realizar la predicción de manera segura con el shape correcto (1, 55)
         probabilidad = model.predict_proba(features_procesadas)[0][1]
         prob_porcentaje = probabilidad * 100
 
@@ -89,5 +73,6 @@ if st.button("Evaluar Riesgo de Cliente", type="primary"):
             st.markdown("**Acción recomendada:** Monitorear comportamiento de pago.")
         else:
             st.success(f"🟢 **Riesgo BAJO:** El cliente se mantiene estable con un **{prob_porcentaje:.2f}%** de probabilidad de mora.")
+            
     except Exception as error_ejecucion:
         st.error(f"🚨 Error en procesamiento: {error_ejecucion}")
